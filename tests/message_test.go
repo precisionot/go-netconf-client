@@ -92,7 +92,7 @@ func TestGetWithoutFilter(t *testing.T) {
 }
 
 func TestGetWithFilter(t *testing.T) {
-	expected := "<rpc xmlns=\"urn:ietf:params:xml:ns:netconf:base:1.0\" message-id=\"\"><filter type=\"subtree\"><top xmlns=\"http://example.com/schema/1.2/config\"><users/></top></filter></rpc>"
+	expected := "<rpc xmlns=\"urn:ietf:params:xml:ns:netconf:base:1.0\" message-id=\"\"><get><filter type=\"subtree\"><top xmlns=\"http://example.com/schema/1.2/config\"><users/></top></filter></get></rpc>"
 
 	rpc := message.NewGet(message.FilterTypeSubtree, data)
 	output, err := xml.Marshal(rpc)
@@ -258,7 +258,7 @@ func TestNewKillSession(t *testing.T) {
 func TestNewCreateSubscription(t *testing.T) {
 	expected := "<rpc xmlns=\"urn:ietf:params:xml:ns:netconf:base:1.0\" message-id=\"\"><create-subscription xmlns=\"urn:ietf:params:xml:ns:netconf:notification:1.0\"><stream>netconf-stream</stream></create-subscription></rpc>"
 
-	rpc := message.NewCreateSubscription("", "", "netconf-stream")
+	rpc := message.NewCreateSubscription("", "", "netconf-stream", "", nil)
 	output, err := xml.Marshal(rpc)
 	if err != nil {
 		t.Errorf(err.Error())
