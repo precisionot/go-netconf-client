@@ -135,8 +135,24 @@ func (session *Session) listen() {
 		for ok := true; ok; ok = !session.IsClosed {
 			rawXML, err := session.Transport.Receive()
 			if err != nil {
-				// What should we do here?
-				continue
+				// A Receive error means the underlying transport read failed
+				// (EOF or a socket error); the connection is effectively dead.
+				// If the session was closed by the caller, exit quietly.
+				// Otherwise the transport died on us: log it, mark the session
+				// closed so consumers observing IsClosed can react (e.g.
+				// reconnect), release the transport, and end the loop.
+				if !session.IsClosed {
+					session.logger.Error("transport receive failed, ending listen loop",
+						"err", err,
+					)
+					session.IsClosed = true
+					if cerr := session.Transport.Close(); cerr != nil {
+						session.logger.Error("failed to close transport after receive error",
+							"err", cerr,
+						)
+					}
+				}
+				break
 			}
 			var rawReply = string(rawXML)
 			isRpcReply, err := regexp.MatchString(message.RpcReplyRegex, rawReply)
