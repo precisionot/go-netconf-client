@@ -214,13 +214,22 @@ func (t *transportBasicIO) Chunked(b []byte) ([]byte, error) {
 
 func (t *transportBasicIO) WaitForFunc(f func([]byte) (int, int, error)) ([]byte, error) {
 	const READ_SIZE int = 4096
+
+	// Each search starts `overlap` number of bytes before the new data. It is one
+	// byte less than the longest separator ("]]>]]>", 6 bytes), and this allows
+	// catching any separator that wasn't fully included in previous read
+	const overlap = len(msgSeparator) - 1
 	buf := make([]byte, READ_SIZE+1)
 
 	// Step 0: Check session t.buffer. If it has data check for a separator. If there is one goto step 3a. If not continue to step 1.
-	// Step 1: Read 4096 bytes from SSH
-	// Step 2: Look for separator
-	// Step 3a: If found save message to out buffer. Trim message plus separator from buffer and store remainder in session t.buffer
-	// Step 3b: Else store what you have in session buffer and loop
+	// Step 1: Read up to 4096 bytes from SSH and append them to t.buffer
+	// Step 2: Look for separator in t.buffer, starting overlap bytes before the newly read bytes
+	// Step 3a: If found return the message, discard the separator and leave the remainder in t.buffer
+	// Step 3b: Else loop
+	//
+	// Every pass leaves t.buffer with no separator before its last overlap bytes
+	// (step 0 searched all of it, and each later pass searched the rest), so
+	// the first match from `from` on is the first separator in the buffer.
 
 	if t.buffer.Len() != 0 {
 		end, separatorLength, err := f(t.buffer.Bytes())
@@ -243,52 +252,42 @@ func (t *transportBasicIO) WaitForFunc(f func([]byte) (int, int, error)) ([]byte
 	}
 
 	for {
-		bytesRead, err := t.Read(buf[0:READ_SIZE])
-		if err != nil {
-			if err != io.EOF {
-				return nil, err
-			}
-			break
-		}
+		bytesRead, readErr := t.Read(buf[0:READ_SIZE])
 
-		// There are bytes from the transport layer
+		// Use the bytes before looking at the error: a Read may return data
+		// together with io.EOF or another error.
 		if bytesRead > 0 {
-			end, separatorLength, err := f(buf[0:bytesRead])
+			from := t.buffer.Len() - overlap
+			if from < 0 {
+				from = 0
+			}
+			t.buffer.Write(buf[0:bytesRead])
+
+			end, separatorLength, err := f(t.buffer.Bytes()[from:])
 			if err != nil {
 				return nil, err
 			}
 
 			// Found a separator and have a full message
 			if end > -1 {
-				// Read the message up until the seperator,
-				// accounting for what's in the shared buffer already
-				returnBuffer := make([]byte, t.buffer.Len()+end)
-				// Add everything we read from the transport(for this message) to
-				// the shared buffer
-				t.buffer.Write(buf[0:end])
+				returnBuffer := make([]byte, from+end)
 				_, err = t.buffer.Read(returnBuffer)
 				if err != nil {
 					return nil, err
 				}
-				// Discard the separator now
-				separatorArray := make([]byte, separatorLength)
-				t.buffer.Read(separatorArray)
-
-				endOfMessage := end + separatorLength
-				// If there are more bytes to process
-				if endOfMessage < bytesRead {
-					// Store the rest of what we read into the session buffer
-					t.buffer.Write(buf[endOfMessage:bytesRead])
-				}
-
+				// Discard the separator; anything after it stays in t.buffer
+				// for the next call (step 0)
+				t.buffer.Next(separatorLength)
 				return returnBuffer, nil
-			} else {
-				// Didn't find the separator and need to store the mesage in the message buffer
-				// for the next go around
-				t.buffer.Write(buf[0:bytesRead])
 			}
 		}
 
+		if readErr != nil {
+			if readErr != io.EOF {
+				return nil, readErr
+			}
+			break
+		}
 	}
 
 	return nil, fmt.Errorf("WaitForFunc failed")
